@@ -19,49 +19,128 @@ def get_db_connection():
 def index():
     return '''
     <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Profit Calculator</title>
-    </head>
-    <body>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profit Calculator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #333;
+        }
+        .container {
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        h1 {
+            color: #007bff;
+            margin-bottom: 20px;
+        }
+        label {
+            font-size: 1.2em;
+        }
+        input[type="date"] {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: calc(100% - 22px);
+            margin-bottom: 20px;
+            font-size: 1em;
+        }
+        button {
+            background-color: #007bff;
+            color: #fff;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #result {
+            margin-top: 20px;
+            text-align: left;
+        }
+        #result h2 {
+            color: #28a745;
+            font-size: 1.5em;
+        }
+        #result ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        #result li {
+            background-color: #e9ecef;
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 1.1em;
+        }
+        #result h3 {
+            margin-top: 20px;
+            color: #dc3545;
+            font-size: 1.4em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Profit Calculator</h1>
         <form id="profitForm">
             <label for="date">Enter date:</label>
             <input type="date" id="date" name="date">
             <button type="submit">Calculate Profit</button>
         </form>
         <div id="result"></div>
-        <script>
-            document.getElementById('profitForm').addEventListener('submit', function(event) {
-                event.preventDefault();
-                const date = document.getElementById('date').value;
-                fetch(`/profit?date=${date}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        const resultDiv = document.getElementById('result');
-                        resultDiv.innerHTML = '';
-                        if (data.error) {
-                            resultDiv.innerHTML = `<p style="color: red;">${data.error}</p>`;
-                        } else {
-                            let resultHtml = '<h2>Profit Calculation</h2><ul>';
-                            for (const [isin, profit] of Object.entries(data)) {
-                                resultHtml += `<li>ISIN: ${isin}, Profit: ${profit}</li>`;
-                            }
-                            resultHtml += '</ul>';
-                            resultDiv.innerHTML = resultHtml;
+    </div>
+    <script>
+        document.getElementById('profitForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const date = document.getElementById('date').value;
+            fetch(`/profit?date=${date}`)
+                .then(response => response.json())
+                .then(data => {
+                    const resultDiv = document.getElementById('result');
+                    resultDiv.innerHTML = '';
+                    if (data.error) {
+                        resultDiv.innerHTML = `<p style="color: red;">${data.error}</p>`;
+                    } else {
+                        let totalProfit = 0;
+                        let resultHtml = `<h2>Profit Calculation on ${date}</h2><ul>`;
+                        for (const [isin, profit] of Object.entries(data)) {
+                            resultHtml += `<li>ISIN: ${isin}, Profit: ${profit.toFixed(2)}</li>`;
+                            totalProfit += profit;
                         }
-                    })
-                    .catch(error => {
-                        console.error('Error fetching profit:', error);
-                        document.getElementById('result').innerHTML = 
-                            '<p style="color: red;">An error occurred while fetching profit.</p>';
-                    });
-            });     
-        </script>
-    </body>
-    </html>
-    '''
+                        resultHtml += '</ul>';
+                        resultHtml += `<h3>Total Profit on ${date}: ${totalProfit.toFixed(2)}</h3>`;
+                        resultDiv.innerHTML = resultHtml;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching profit:', error);
+                    document.getElementById('result').innerHTML = 
+                        '<p style="color: red;">An error occurred while fetching profit.</p>';
+                });
+        });
+    </script>
+</body>
+</html>
+'''
 
 @app.route('/profit', methods=['GET'])
 def calculate_profit():
