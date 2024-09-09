@@ -102,8 +102,10 @@ def index():
     <div class="container">
         <h1>Profit Calculator</h1>
         <form id="profitForm">
-            <label for="date">Enter date:</label>
-            <input type="date" id="date" name="date">
+            <label for="start_date">Enter start date:</label>
+            <input type="date" id="start_date" name="start_date">
+            <label for="end_date">Enter end date:</label>
+            <input type="date" id="end_date" name="end_date">
             <button type="submit">Calculate Profit</button>
         </form>
         <div id="result"></div>
@@ -111,8 +113,9 @@ def index():
     <script>
         document.getElementById('profitForm').addEventListener('submit', function(event) {
             event.preventDefault();
-            const date = document.getElementById('date').value;
-            fetch(`/profit?date=${date}`)
+            const startDate = document.getElementById('start_date').value;
+            const endDate = document.getElementById('end_date').value;
+            fetch(`/profit?start_date=${startDate}&end_date=${endDate}`)
                 .then(response => response.json())
                 .then(data => {
                     const resultDiv = document.getElementById('result');
@@ -121,13 +124,13 @@ def index():
                         resultDiv.innerHTML = `<p style="color: red;">${data.error}</p>`;
                     } else {
                         let totalProfit = 0;
-                        let resultHtml = `<h2>Profit Calculation on ${date}</h2><ul>`;
-                        for (const [isin, profit] of Object.entries(data)) {
-                            resultHtml += `<li>ISIN: ${isin}, Profit: ${profit.toFixed(2)}</li>`;
-                            totalProfit += profit;
+                        let resultHtml = `<h2>Profit Calculation from ${startDate} to ${endDate}</h2><ul>`;
+                        for (const [isin, profit] of Object.entries(data.profits_by_date)) {
+                            resultHtml += `<li>Date: ${isin}, Profit: ${profit.toFixed(2)}</li>`;
                         }
+                        totalProfit = data.total_profit;
                         resultHtml += '</ul>';
-                        resultHtml += `<h3>Total Profit on ${date}: ${totalProfit.toFixed(2)}</h3>`;
+                        resultHtml += `<h3>Total Profit: ${totalProfit.toFixed(2)}</h3>`;
                         resultDiv.innerHTML = resultHtml;
                     }
                 })
@@ -144,44 +147,60 @@ def index():
 
 @app.route('/profit', methods=['GET'])
 def calculate_profit():
-    date_str = request.args.get('date')
-    if not date_str:
-        return jsonify({"error": "Date parameter is required"}), 400
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+
+    if not start_date_str or not end_date_str:
+        return jsonify({"error": "Start date and end date are required"}), 400
 
     try:
-        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
     except ValueError:
         return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
+
+    if start_date > end_date:
+        return jsonify({"error": "Start date cannot be after end date"}), 400
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Fetch sell trades for the specified date
-        cursor.execute("""
-            SELECT ISIN, Quantity, Price, `Order Execution Time`
-            FROM sheet 
-            WHERE `Trade Date` = %s AND `Trade Type` = 'sell'
-        """, (date,))
-        sell_trades = cursor.fetchall()
+        # Initialize profit storage
+        profits_by_date = {}
+        total_profit = 0
 
-        if not sell_trades:
-            return jsonify({"error": "No sell trades found for the given date"}), 404
+        current_date = start_date
+        while current_date <= end_date:
+            cursor.execute("""
+                SELECT ISIN, Quantity, Price, `Order Execution Time`
+                FROM sheet 
+                WHERE `Trade Date` = %s AND `Trade Type` = 'sell'
+            """, (current_date,))
+            sell_trades = cursor.fetchall()
 
-        profit = {}
+            if sell_trades:
+                for sell_trade in sell_trades:
+                    profit = calculate_trade_profit(cursor, sell_trade, current_date)
+                    if current_date not in profits_by_date:
+                        profits_by_date[current_date] = 0
+                    profits_by_date[current_date] += profit
+                    total_profit += profit
 
-        for sell_trade in sell_trades:
-            total_profit = calculate_trade_profit(cursor, sell_trade, date)
-            profit[sell_trade['ISIN']] = profit.get(sell_trade['ISIN'], 0) + total_profit
+            current_date += timedelta(days=1)
 
         cursor.close()
         conn.close()
 
-        return jsonify(profit)
+        return jsonify({
+            "profits_by_date": {str(k): v for k, v in profits_by_date.items()},
+            "total_profit": total_profit
+        })
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 def calculate_trade_profit(cursor, sell_trade, sell_date):
     """Calculate profit for a given sell trade by traversing the corresponding buy trades."""
@@ -192,6 +211,7 @@ def calculate_trade_profit(cursor, sell_trade, sell_date):
     total_profit = 0
     current_date = sell_date
 
+    # Backward traversing (Same or earlier date)
     while remaining_qty > 0:
         cursor.execute("""
             SELECT Quantity, Price, `Order Execution Time`
@@ -214,22 +234,43 @@ def calculate_trade_profit(cursor, sell_trade, sell_date):
 
             if remaining_qty == 0:
                 break
-                #forward traversal
-        if remaining_qty > 0 and current_date == sell_date:
-            for buy_trade in buy_trades:
-                if buy_trade['Order Execution Time'] > sell_time:
-                    matched_qty = min(remaining_qty, float(buy_trade['Quantity']))
-                    total_profit += (sell_price - float(buy_trade['Price'])) * matched_qty
-                    remaining_qty -= matched_qty
 
-                    if remaining_qty == 0:
-                        break
-
+        # Stop backward traversing if no more trades are left for this sell trade
         current_date -= timedelta(days=1)
         if current_date < datetime(2000, 1, 1).date():
             break
 
+    # Forward traversing logic (After the sell trade time)
+    if remaining_qty > 0:
+        current_date = sell_date  # Reset date to the original sell date
+        while remaining_qty > 0:
+            cursor.execute("""
+                SELECT Quantity, Price, `Order Execution Time`
+                FROM sheet
+                WHERE ISIN = %s AND `Trade Type` = 'buy' AND `Trade Date` = %s AND `Order Execution Time` > %s
+            """, (sell_trade['ISIN'], current_date, sell_time))
+            forward_buy_trades = cursor.fetchall()
+
+            for buy_trade in forward_buy_trades:
+                buy_qty = float(buy_trade['Quantity'])
+                buy_price = float(buy_trade['Price'])
+                matched_qty = min(remaining_qty, buy_qty)
+
+                total_profit += (sell_price - buy_price) * matched_qty
+                remaining_qty -= matched_qty
+
+                if remaining_qty == 0:
+                    break
+
+            # Move to the next day if trades are still not fully matched
+            current_date += timedelta(days=1)
+
+            # Break the loop if traversing too far into the future
+            if current_date > datetime.now().date():
+                break
+
     return total_profit
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
